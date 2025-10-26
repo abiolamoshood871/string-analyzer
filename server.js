@@ -3,10 +3,11 @@ const bodyParser = require("body-parser");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
 const cors = require("cors");
+const axios = require("axios");
 
 const app = express();
-app.use(cors());
 app.use(bodyParser.json());
+app.use(cors());
 
 // --------------------
 // SQLite setup
@@ -28,25 +29,6 @@ db.prepare(`
 `).run();
 
 // --------------------
-// ✅ /me endpoint (HNG Profile Endpoint)
-// --------------------
-app.get("/me", (req, res) => {
-  res.json({
-    slackUsername: "G", // 👈 Replace with your Slack username
-    backend: true,
-    age: 20,
-    bio: "I am a mechanical engineering student learning backend development using Node.js and Render.",
-  });
-});
-
-// --------------------
-// ✅ Root route
-// --------------------
-app.get("/", (req, res) => {
-  res.send("Welcome to the String Analyzer API 🚀");
-});
-
-// --------------------
 // POST /strings — add new string
 // --------------------
 app.post("/strings", (req, res) => {
@@ -55,6 +37,7 @@ app.post("/strings", (req, res) => {
 
   const id = crypto.createHash("sha256").update(value).digest("hex");
 
+  // Check if string already exists
   const exists = db.prepare("SELECT * FROM strings WHERE id = ?").get(id);
   if (exists) return res.status(409).json({ error: "String already exists" });
 
@@ -64,10 +47,12 @@ app.post("/strings", (req, res) => {
   const word_count = value.trim().split(/\s+/).length;
 
   const character_frequency_map = {};
-  for (const char of value) character_frequency_map[char] = (character_frequency_map[char] || 0) + 1;
+  for (const char of value)
+    character_frequency_map[char] = (character_frequency_map[char] || 0) + 1;
 
   const created_at = new Date().toISOString();
 
+  // Insert into SQLite
   db.prepare(`
     INSERT INTO strings (id, value, length, is_palindrome, unique_characters, word_count, sha256_hash, character_frequency_map, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -102,35 +87,64 @@ app.post("/strings", (req, res) => {
 // GET /strings — get all strings with filters
 // --------------------
 app.get("/strings", (req, res) => {
-  const { is_palindrome, min_length, max_length, word_count, contains_character } = req.query;
+  const {
+    is_palindrome,
+    min_length,
+    max_length,
+    word_count,
+    contains_character,
+  } = req.query;
 
-  let allStrings = db.prepare("SELECT * FROM strings").all().map((row) => ({
-    id: row.id,
-    value: row.value,
-    properties: {
-      length: row.length,
-      is_palindrome: !!row.is_palindrome,
-      unique_characters: row.unique_characters,
-      word_count: row.word_count,
-      sha256_hash: row.sha256_hash,
-      character_frequency_map: JSON.parse(row.character_frequency_map),
-    },
-    created_at: row.created_at,
-  }));
+  let allStrings = db
+    .prepare("SELECT * FROM strings")
+    .all()
+    .map((row) => ({
+      id: row.id,
+      value: row.value,
+      properties: {
+        length: row.length,
+        is_palindrome: !!row.is_palindrome,
+        unique_characters: row.unique_characters,
+        word_count: row.word_count,
+        sha256_hash: row.sha256_hash,
+        character_frequency_map: JSON.parse(row.character_frequency_map),
+      },
+      created_at: row.created_at,
+    }));
 
   if (is_palindrome !== undefined) {
     const boolVal = is_palindrome === "true";
-    allStrings = allStrings.filter((item) => item.properties.is_palindrome === boolVal);
+    allStrings = allStrings.filter(
+      (item) => item.properties.is_palindrome === boolVal
+    );
   }
-  if (min_length) allStrings = allStrings.filter((item) => item.properties.length >= Number(min_length));
-  if (max_length) allStrings = allStrings.filter((item) => item.properties.length <= Number(max_length));
-  if (word_count) allStrings = allStrings.filter((item) => item.properties.word_count === Number(word_count));
-  if (contains_character) allStrings = allStrings.filter((item) => item.value.includes(contains_character));
+  if (min_length)
+    allStrings = allStrings.filter(
+      (item) => item.properties.length >= Number(min_length)
+    );
+  if (max_length)
+    allStrings = allStrings.filter(
+      (item) => item.properties.length <= Number(max_length)
+    );
+  if (word_count)
+    allStrings = allStrings.filter(
+      (item) => item.properties.word_count === Number(word_count)
+    );
+  if (contains_character)
+    allStrings = allStrings.filter((item) =>
+      item.value.includes(contains_character)
+    );
 
   return res.json({
     data: allStrings,
     count: allStrings.length,
-    filters_applied: { is_palindrome, min_length, max_length, word_count, contains_character },
+    filters_applied: {
+      is_palindrome,
+      min_length,
+      max_length,
+      word_count,
+      contains_character,
+    },
   });
 });
 
@@ -145,6 +159,7 @@ app.get("/strings/filter-by-natural-language", (req, res) => {
   const lower = query.toLowerCase();
   const filters = {};
 
+  // Simple parsing rules
   if (lower.includes("palindromic")) filters.is_palindrome = true;
   if (lower.includes("single word")) filters.word_count = 1;
 
@@ -154,31 +169,43 @@ app.get("/strings/filter-by-natural-language", (req, res) => {
   const letterMatch = lower.match(/letter (\w)/);
   if (letterMatch) filters.contains_character = letterMatch[1];
 
-  let allStrings = db.prepare("SELECT * FROM strings").all().map((row) => ({
-    id: row.id,
-    value: row.value,
-    properties: {
-      length: row.length,
-      is_palindrome: !!row.is_palindrome,
-      unique_characters: row.unique_characters,
-      word_count: row.word_count,
-      sha256_hash: row.sha256_hash,
-      character_frequency_map: JSON.parse(row.character_frequency_map),
-    },
-    created_at: row.created_at,
-  }));
+  // Apply filters
+  let allStrings = db
+    .prepare("SELECT * FROM strings")
+    .all()
+    .map((row) => ({
+      id: row.id,
+      value: row.value,
+      properties: {
+        length: row.length,
+        is_palindrome: !!row.is_palindrome,
+        unique_characters: row.unique_characters,
+        word_count: row.word_count,
+        sha256_hash: row.sha256_hash,
+        character_frequency_map: JSON.parse(row.character_frequency_map),
+      },
+      created_at: row.created_at,
+    }));
 
   if (filters.is_palindrome !== undefined) {
-    allStrings = allStrings.filter((item) => item.properties.is_palindrome === filters.is_palindrome);
+    allStrings = allStrings.filter(
+      (item) => item.properties.is_palindrome === filters.is_palindrome
+    );
   }
   if (filters.word_count) {
-    allStrings = allStrings.filter((item) => item.properties.word_count === filters.word_count);
+    allStrings = allStrings.filter(
+      (item) => item.properties.word_count === filters.word_count
+    );
   }
   if (filters.min_length) {
-    allStrings = allStrings.filter((item) => item.properties.length >= filters.min_length);
+    allStrings = allStrings.filter(
+      (item) => item.properties.length >= filters.min_length
+    );
   }
   if (filters.contains_character) {
-    allStrings = allStrings.filter((item) => item.value.includes(filters.contains_character));
+    allStrings = allStrings.filter((item) =>
+      item.value.includes(filters.contains_character)
+    );
   }
 
   return res.json({
@@ -192,9 +219,26 @@ app.get("/strings/filter-by-natural-language", (req, res) => {
 });
 
 // --------------------
+// GET /me — Render Profile Endpoint
+// --------------------
+app.get("/me", async (req, res) => {
+  try {
+    const response = await axios.get("https://catfact.ninja/fact");
+    res.json({
+      email: "abiolamoshood871@gmail.com",
+      current_datetime: new Date().toISOString(),
+      github_url: "https://github.com/abiolamoshood871",
+      cat_fact: response.data.fact,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch cat fact" });
+  }
+});
+
+// --------------------
 // Start server
 // --------------------
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
 });
